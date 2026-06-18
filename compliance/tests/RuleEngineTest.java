@@ -47,4 +47,14 @@ class RuleEngineTest {
 
         assertFalse(result.isCompliant());
     }
+
+    @Test
+    void amlPassesBelowThreshold() {
+        Map<String, Object> data = new HashMap<>();
+        data.put("transaction_amount", 5000.0);
+
+        ComplianceResult result = ruleEngine.evaluate("AML", data);
+
+        assertTrue(result.isCompliant());
+    }
 }
