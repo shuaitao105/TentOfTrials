@@ -1,0 +1,31 @@
+{
+  "generated_at": "2026-06-18T01:41:16.164177+00:00",
+  "commit": "0c8fffb9",
+  "diagnostic_logd": [
+    "diagnostic\\build-0c8fffb9-part001.logd",
+    "diagnostic\\build-0c8fffb9-part002.logd",
+    "diagnostic\\build-0c8fffb9-part003.logd",
+    "diagnostic\\build-0c8fffb9-part004.logd",
+    "diagnostic\\build-0c8fffb9-part005.logd",
+    "diagnostic\\build-0c8fffb9-part006.logd"
+  ],
+  "diagnostic_logd_error": null,
+  "message_blocker": null,
+  "chunked": true,
+  "chunk_size_bytes": 41943040,
+  "password": "95ebb450cb994b1f6447",
+  "decrypt_command": "encryptly unpack diagnostic\\build-0c8fffb9.logd <outdir> --password 95ebb450cb994b1f6447",
+  "total_modules": 1,
+  "passed": 1,
+  "failed": 0,
+  "modules": [
+    {
+      "name": "compliance",
+      "status": "PASS",
+      "elapsed_seconds": 0.517,
+      "artifact": "D:\\software\\workspace\\Money\\work\\TentOfTrials\\compliance\\build",
+      "output": ""
+    }
+  ],
+  "pr_note": "Include the encrypted diagnostic logd artifact(s): diagnostic\\build-0c8fffb9-part001.logd, diagnostic\\build-0c8fffb9-part002.logd, diagnostic\\build-0c8fffb9-part003.logd, diagnostic\\build-0c8fffb9-part004.logd, diagnostic\\build-0c8fffb9-part005.logd, diagnostic\\build-0c8fffb9-part006.logd. The encrypted .logd is the required diagnostic content for PR review; this JSON file is metadata. Maintainers may ask you to remove these diagnostic artifacts before merging."
+}
