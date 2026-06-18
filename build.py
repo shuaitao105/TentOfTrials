@@ -492,6 +492,11 @@ def collect_system_info() -> str:
     return "\n".join(lines)
 
 
+def posix_relpath(path: Path) -> str:
+    """Return a repo-relative path using forward slashes for CI metadata."""
+    return path.relative_to(ROOT).as_posix()
+
+
 def build_diagnostic_report(
     results: list[tuple[str, bool, float, str, Optional[str]]],
     commit_id: str,
@@ -501,6 +506,9 @@ def build_diagnostic_report(
     chunked: bool = False,
     message_blocker: Optional[str] = None,
 ) -> dict:
+    if logd_relpaths:
+        logd_relpaths = [p.replace("\\", "/") for p in logd_relpaths]
+
     diagnostic_logd: Optional[str | list[str]]
     if not logd_relpaths:
         diagnostic_logd = None
@@ -511,7 +519,7 @@ def build_diagnostic_report(
 
     decrypt_target = logd_relpaths[0] if logd_relpaths and len(logd_relpaths) == 1 else None
     if logd_relpaths and len(logd_relpaths) > 1:
-        decrypt_target = str((DIAGNOSTIC_DIR / f"build-{commit_id}.logd").relative_to(ROOT))
+        decrypt_target = posix_relpath(DIAGNOSTIC_DIR / f"build-{commit_id}.logd")
 
     report = {
         "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -714,7 +722,7 @@ def generate_logd(
 
         safe_pw = sr.stdout.strip()
         logd_files = split_diagnostic_logd(logd_path)
-        logd_relpaths = [str(path.relative_to(ROOT)) for path in logd_files]
+        logd_relpaths = [posix_relpath(path) for path in logd_files]
         decrypt_target = logd_relpaths[0] if len(logd_relpaths) == 1 else str(logd_path.relative_to(ROOT))
         write_diagnostic_report(
             metadata_path,
