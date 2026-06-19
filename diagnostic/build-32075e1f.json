@@ -1,0 +1,31 @@
+{
+  "generated_at": "2026-06-19T13:40:25.674124+00:00",
+  "commit": "32075e1f",
+  "diagnostic_logd": [
+    "diagnostic/build-32075e1f-part001.logd",
+    "diagnostic/build-32075e1f-part002.logd",
+    "diagnostic/build-32075e1f-part003.logd",
+    "diagnostic/build-32075e1f-part004.logd",
+    "diagnostic/build-32075e1f-part005.logd",
+    "diagnostic/build-32075e1f-part006.logd"
+  ],
+  "diagnostic_logd_error": null,
+  "message_blocker": null,
+  "chunked": true,
+  "chunk_size_bytes": 41943040,
+  "password": "231c97a9e266bec03a94",
+  "decrypt_command": "encryptly unpack diagnostic/build-32075e1f.logd <outdir> --password 231c97a9e266bec03a94",
+  "total_modules": 1,
+  "passed": 1,
+  "failed": 0,
+  "modules": [
+    {
+      "name": "compliance",
+      "status": "PASS",
+      "elapsed_seconds": 0.596,
+      "artifact": "D:\\software\\workspace\\Money\\work\\TentOfTrials\\compliance\\build",
+      "output": "\u6ce8: ComplianceAuditor.java\u4f7f\u7528\u6216\u8986\u76d6\u4e86\u5df2\u8fc7\u65f6\u7684 API\u3002\n\u6ce8: \u6709\u5173\u8be6\u7ec6\u4fe1\u606f, \u8bf7\u4f7f\u7528 -Xlint:deprecation \u91cd\u65b0\u7f16\u8bd1\u3002"
+    }
+  ],
+  "pr_note": "Include the encrypted diagnostic logd artifact(s): diagnostic/build-32075e1f-part001.logd, diagnostic/build-32075e1f-part002.logd, diagnostic/build-32075e1f-part003.logd, diagnostic/build-32075e1f-part004.logd, diagnostic/build-32075e1f-part005.logd, diagnostic/build-32075e1f-part006.logd. The encrypted .logd is the required diagnostic content for PR review; this JSON file is metadata. Maintainers may ask you to remove these diagnostic artifacts before merging."
+}
