@@ -31,7 +31,9 @@ Usage:
 """
 
 import argparse
+import http.client
 import json
+import logging
 import os
 import socket
 import ssl
@@ -64,19 +66,63 @@ DISK_THRESHOLD_CRITICAL = 90
 MEMORY_THRESHOLD_WARNING = 80
 MEMORY_THRESHOLD_CRITICAL = 90
 
+logger = logging.getLogger(__name__)
+
 # ---------------------------------------------------------------------------
 # CHECK FUNCTIONS
 # ---------------------------------------------------------------------------
 
+def request_http_with_retries(
+    host: str,
+    port: int,
+    path: str,
+    timeout: int,
+    max_attempts: int = 3,
+    initial_delay: float = 1.0,
+    sleep: Any = time.sleep,
+) -> Tuple[int, str]:
+    """Perform an HTTP health probe with exponential backoff retries."""
+    if max_attempts < 1:
+        raise ValueError("max_attempts must be at least 1")
+
+    delay = initial_delay
+    last_error: Optional[Exception] = None
+
+    for attempt in range(1, max_attempts + 1):
+        conn: Optional[http.client.HTTPConnection] = None
+        try:
+            conn = http.client.HTTPConnection(host, port, timeout=timeout)
+            conn.request("GET", path)
+            resp = conn.getresponse()
+            status = resp.status
+            body = resp.read().decode("utf-8", errors="replace")[:200]
+            return status, body
+        except Exception as exc:
+            last_error = exc
+            if attempt >= max_attempts:
+                raise
+            logger.warning(
+                "HTTP health probe failed for %s:%s%s on attempt %s/%s; retrying in %ss: %s",
+                host,
+                port,
+                path,
+                attempt,
+                max_attempts,
+                delay,
+                exc,
+            )
+            sleep(delay)
+            delay *= 2
+        finally:
+            if conn is not None:
+                conn.close()
+
+    raise RuntimeError(f"HTTP health probe failed without result: {last_error}")
+
+
 def check_http_service(host: str, port: int, path: str, timeout: int) -> Tuple[str, str, int]:
-    import http.client
     try:
-        conn = http.client.HTTPConnection(host, port, timeout=timeout)
-        conn.request("GET", path)
-        resp = conn.getresponse()
-        status = resp.status
-        body = resp.read().decode("utf-8", errors="replace")[:200]
-        conn.close()
+        status, body = request_http_with_retries(host, port, path, timeout)
 
         if status == 200:
             result = "OK"
