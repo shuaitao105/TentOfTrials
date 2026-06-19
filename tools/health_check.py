@@ -32,6 +32,7 @@ Usage:
 
 import argparse
 import json
+import logging
 import os
 import socket
 import ssl
@@ -39,7 +40,12 @@ import subprocess
 import sys
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_HTTP_PROBE_ATTEMPTS = 3
+DEFAULT_HTTP_PROBE_BACKOFF_SECONDS = 1.0
 
 # ---------------------------------------------------------------------------
 # CONSTANTS
@@ -68,29 +74,69 @@ MEMORY_THRESHOLD_CRITICAL = 90
 # CHECK FUNCTIONS
 # ---------------------------------------------------------------------------
 
-def check_http_service(host: str, port: int, path: str, timeout: int) -> Tuple[str, str, int]:
+def http_probe_once(host: str, port: int, path: str, timeout: int) -> Tuple[str, str, int]:
+    """Perform a single HTTP health probe without retry."""
     import http.client
+
+    conn = http.client.HTTPConnection(host, port, timeout=timeout)
     try:
-        conn = http.client.HTTPConnection(host, port, timeout=timeout)
         conn.request("GET", path)
         resp = conn.getresponse()
         status = resp.status
         body = resp.read().decode("utf-8", errors="replace")[:200]
+    finally:
         conn.close()
 
-        if status == 200:
-            result = "OK"
-            detail = f"HTTP {status}"
-        elif status < 500:
-            result = "WARNING"
-            detail = f"HTTP {status}: {body[:100]}"
-        else:
-            result = "CRITICAL"
-            detail = f"HTTP {status}: {body[:100]}"
+    if status == 200:
+        return "OK", f"HTTP {status}", status
+    if status < 500:
+        return "WARNING", f"HTTP {status}: {body[:100]}", status
+    return "CRITICAL", f"HTTP {status}: {body[:100]}", status
 
-        return result, detail, status
-    except Exception as e:
-        return "CRITICAL", str(e), 0
+
+def probe_http_with_retry(
+    host: str,
+    port: int,
+    path: str,
+    timeout: int,
+    max_attempts: int = DEFAULT_HTTP_PROBE_ATTEMPTS,
+    initial_backoff_seconds: float = DEFAULT_HTTP_PROBE_BACKOFF_SECONDS,
+    sleep_fn: Callable[[float], None] = time.sleep,
+    probe_fn: Optional[Callable[[str, int, str, int], Tuple[str, str, int]]] = None,
+) -> Tuple[str, str, int]:
+    """Probe HTTP with exponential backoff between retryable failures."""
+    probe = probe_fn or http_probe_once
+    backoff = initial_backoff_seconds
+    last_result = "CRITICAL", "probe failed", 0
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            result, detail, code = probe(host, port, path, timeout)
+            last_result = result, detail, code
+            if result != "CRITICAL":
+                return result, detail, code
+        except Exception as exc:
+            last_result = "CRITICAL", str(exc), 0
+
+        if attempt < max_attempts:
+            logger.warning(
+                "HTTP probe failed for %s:%s%s (attempt %d/%d): %s; retrying in %.1fs",
+                host,
+                port,
+                path,
+                attempt,
+                max_attempts,
+                last_result[1],
+                backoff,
+            )
+            sleep_fn(backoff)
+            backoff *= 2
+
+    return last_result
+
+
+def check_http_service(host: str, port: int, path: str, timeout: int) -> Tuple[str, str, int]:
+    return probe_http_with_retry(host, port, path, timeout)
 
 
 def check_tcp_port(host: str, port: int, timeout: int) -> Tuple[str, str, float]:
