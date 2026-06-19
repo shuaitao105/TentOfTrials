@@ -32,6 +32,7 @@ Usage:
 
 import argparse
 import json
+import logging
 import os
 import socket
 import ssl
@@ -39,7 +40,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # CONSTANTS
@@ -64,33 +65,75 @@ DISK_THRESHOLD_CRITICAL = 90
 MEMORY_THRESHOLD_WARNING = 80
 MEMORY_THRESHOLD_CRITICAL = 90
 
+DEFAULT_HTTP_MAX_ATTEMPTS = 3
+DEFAULT_HTTP_BACKOFF_SECONDS = 1.0
+
+logger = logging.getLogger(__name__)
+
 # ---------------------------------------------------------------------------
 # CHECK FUNCTIONS
 # ---------------------------------------------------------------------------
 
-def check_http_service(host: str, port: int, path: str, timeout: int) -> Tuple[str, str, int]:
+def request_http_service_once(host: str, port: int, path: str, timeout: int) -> Tuple[str, str, int]:
     import http.client
+
+    conn = http.client.HTTPConnection(host, port, timeout=timeout)
     try:
-        conn = http.client.HTTPConnection(host, port, timeout=timeout)
         conn.request("GET", path)
         resp = conn.getresponse()
         status = resp.status
         body = resp.read().decode("utf-8", errors="replace")[:200]
+    finally:
         conn.close()
 
-        if status == 200:
-            result = "OK"
-            detail = f"HTTP {status}"
-        elif status < 500:
-            result = "WARNING"
-            detail = f"HTTP {status}: {body[:100]}"
-        else:
-            result = "CRITICAL"
-            detail = f"HTTP {status}: {body[:100]}"
+    if status == 200:
+        result = "OK"
+        detail = f"HTTP {status}"
+    elif status < 500:
+        result = "WARNING"
+        detail = f"HTTP {status}: {body[:100]}"
+    else:
+        result = "CRITICAL"
+        detail = f"HTTP {status}: {body[:100]}"
 
-        return result, detail, status
-    except Exception as e:
-        return "CRITICAL", str(e), 0
+    return result, detail, status
+
+
+def check_http_service(
+    host: str,
+    port: int,
+    path: str,
+    timeout: int,
+    max_attempts: int = DEFAULT_HTTP_MAX_ATTEMPTS,
+    backoff_seconds: float = DEFAULT_HTTP_BACKOFF_SECONDS,
+    sleep_fn: Callable[[float], None] = time.sleep,
+) -> Tuple[str, str, int]:
+    attempts = max(1, max_attempts)
+    delay = max(0.0, backoff_seconds)
+    last_error: Optional[Exception] = None
+
+    for attempt in range(1, attempts + 1):
+        try:
+            return request_http_service_once(host, port, path, timeout)
+        except Exception as e:
+            last_error = e
+            if attempt == attempts:
+                break
+            logger.warning(
+                "HTTP health probe failed for %s:%s%s on attempt %s/%s: %s; retrying in %.1fs",
+                host,
+                port,
+                path,
+                attempt,
+                attempts,
+                e,
+                delay,
+            )
+            if delay > 0:
+                sleep_fn(delay)
+            delay *= 2
+
+    return "CRITICAL", str(last_error), 0
 
 
 def check_tcp_port(host: str, port: int, timeout: int) -> Tuple[str, str, float]:
@@ -200,7 +243,12 @@ def check_load_average() -> Tuple[str, str, float]:
 # HEALTH CHECK RUNNER
 # ---------------------------------------------------------------------------
 
-def run_health_checks(service: Optional[str] = None, json_output: bool = False) -> Dict[str, Any]:
+def run_health_checks(
+    service: Optional[str] = None,
+    json_output: bool = False,
+    http_retries: int = DEFAULT_HTTP_MAX_ATTEMPTS,
+    http_backoff: float = DEFAULT_HTTP_BACKOFF_SECONDS,
+) -> Dict[str, Any]:
     results: Dict[str, Any] = {
         "timestamp": datetime.now().isoformat(),
         "hostname": socket.gethostname(),
@@ -217,7 +265,12 @@ def run_health_checks(service: Optional[str] = None, json_output: bool = False) 
         if service and name != service:
             continue
         status, detail, code = check_http_service(
-            config["host"], config["port"], config["path"], config["timeout"]
+            config["host"],
+            config["port"],
+            config["path"],
+            config["timeout"],
+            max_attempts=http_retries,
+            backoff_seconds=http_backoff,
         )
         results["services"][name] = {
             "status": status,
@@ -307,6 +360,18 @@ def parse_args():
     parser.add_argument("--watch", "-w", action="store_true", help="Continuous monitoring")
     parser.add_argument("--interval", "-i", type=int, default=30, help="Check interval in seconds")
     parser.add_argument("--output", "-o", help="Output file path")
+    parser.add_argument(
+        "--http-retries",
+        type=int,
+        default=DEFAULT_HTTP_MAX_ATTEMPTS,
+        help="Maximum HTTP probe attempts before reporting CRITICAL (default: 3)",
+    )
+    parser.add_argument(
+        "--http-backoff",
+        type=float,
+        default=DEFAULT_HTTP_BACKOFF_SECONDS,
+        help="Initial HTTP retry backoff in seconds; doubles after each failed attempt (default: 1)",
+    )
     return parser.parse_args()
 
 
@@ -317,7 +382,7 @@ def main():
         print(f"Continuous monitoring (interval: {args.interval}s). Press Ctrl+C to stop.")
         try:
             while True:
-                results = run_health_checks(args.service, args.json)
+                results = run_health_checks(args.service, args.json, args.http_retries, args.http_backoff)
                 if args.json:
                     print(json.dumps(results, indent=2))
                 else:
@@ -326,7 +391,7 @@ def main():
         except KeyboardInterrupt:
             print("\nMonitoring stopped")
     else:
-        results = run_health_checks(args.service, args.json)
+        results = run_health_checks(args.service, args.json, args.http_retries, args.http_backoff)
         if args.json:
             output = json.dumps(results, indent=2)
             print(output)
