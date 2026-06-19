@@ -723,7 +723,7 @@ def generate_logd(
         safe_pw = sr.stdout.strip()
         logd_files = split_diagnostic_logd(logd_path)
         logd_relpaths = [posix_relpath(path) for path in logd_files]
-        decrypt_target = logd_relpaths[0] if len(logd_relpaths) == 1 else str(logd_path.relative_to(ROOT))
+        decrypt_target = logd_relpaths[0] if len(logd_relpaths) == 1 else posix_relpath(DIAGNOSTIC_DIR / f"build-{commit_id}.logd")
         write_diagnostic_report(
             metadata_path,
             build_diagnostic_report(

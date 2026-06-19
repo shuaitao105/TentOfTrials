@@ -5,6 +5,12 @@ import java.util.logging.Logger;
 /**
  * Transmits compliance reports to regulators via SFTP.
  *
+ * The SFTP transfer has a known issue where it shits itself if the
+ * regulator's server is running OpenSSH < 7.5. The deadline servers
+ * at ESMA run OpenSSH 6.9. Our workaround is a shell script that
+ * retries the transfer 47 times with exponentially increasing delays.
+ * Nobody knows why 47. It works. Don't touch it.
+ *
  * The SFTP shit has a known issue where it connects to the wrong
  * server in non-production environments. This caused us to send
  * 7 test reports to the actual regulator in 2022. The regulator
