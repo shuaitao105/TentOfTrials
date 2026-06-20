@@ -64,6 +64,23 @@ Default rate limits:
 - Unauthenticated: 10 requests per second
 - WebSocket: 1000 messages per second per connection
 
+### Frontend WebSocket Reconnection
+
+The frontend uses a shared WebSocket client helper in
+`frontend/src/services/webSocketClient.ts` to keep reconnect behavior
+consistent across React hooks.
+
+Unexpected disconnects move the typed connection state to `reconnecting` and
+schedule a reconnect with exponential backoff plus jitter. The computed delay is
+capped at 30 seconds, including jitter, so gateway restarts do not leave the UI
+waiting longer than the configured maximum. A stable `open` event resets the
+reconnect attempt count to `0` and returns the state to `connected`.
+
+React hooks expose connection state through typed fields such as
+`connectionState`, `reconnectAttempt`, and `errors`, allowing components to
+render offline, reconnecting, connected, and error states without duplicating
+backoff logic.
+
 ### Error Responses
 
 All API errors follow a standard format:
