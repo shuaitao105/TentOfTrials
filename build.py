@@ -51,6 +51,10 @@ def run_text_process(cmd: list[str], **kwargs) -> subprocess.CompletedProcess[st
         kwargs.setdefault("errors", "replace")
     if kwargs.get("env") is not None:
         kwargs["env"] = subprocess_env(kwargs["env"])
+    if cmd and os.name == "nt":
+        resolved = shutil.which(cmd[0])
+        if resolved:
+            cmd = [resolved, *cmd[1:]]
     return subprocess.run(cmd, **kwargs)
 
 
