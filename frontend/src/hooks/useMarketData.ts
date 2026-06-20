@@ -14,6 +14,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { calculateReconnectDelay, shouldReconnectAfterClose } from '../services/webSocketClient';
 
 // ---------------------------------------------------------------------------
 // TYPES
@@ -171,12 +172,14 @@ export function useMarketData(options: UseMarketDataOptions): MarketDataState & 
         }));
       };
 
-      ws.onclose = () => {
+      ws.onclose = (event) => {
         if (!mountedRef.current) return;
         wsRef.current = null;
         clearPingTimer();
         setState(prev => ({ ...prev, connectionStatus: 'disconnected' }));
-        scheduleReconnect();
+        if (shouldReconnectAfterClose(event)) {
+          scheduleReconnect();
+        }
       };
     } catch (err) {
       if (!mountedRef.current) return;
@@ -246,10 +249,11 @@ export function useMarketData(options: UseMarketDataOptions): MarketDataState & 
       return;
     }
 
-    const delay = Math.min(
-      RECONNECT_BASE_DELAY * Math.pow(2, reconnectAttemptRef.current) + Math.random() * 1000,
-      RECONNECT_MAX_DELAY
-    );
+    const delay = calculateReconnectDelay(reconnectAttemptRef.current, {
+      baseDelayMs: RECONNECT_BASE_DELAY,
+      maxDelayMs: RECONNECT_MAX_DELAY,
+      jitterMs: 1000,
+    });
     reconnectAttemptRef.current++;
 
     reconnectTimerRef.current = window.setTimeout(() => {
