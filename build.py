@@ -9,6 +9,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -441,6 +442,52 @@ def run_cmd(cmd: list[str], **kwargs) -> tuple[bool, str]:
         return False, str(e)
 
 
+def _redaction_tokens() -> list[str]:
+    values: set[str] = set()
+    path_values = [ROOT, Path.home(), Path(tempfile.gettempdir())]
+    for env_key in ("TMP", "TEMP", "TMPDIR"):
+        env_value = os.environ.get(env_key)
+        if env_value:
+            path_values.append(Path(env_value))
+
+    for path in path_values:
+        try:
+            resolved = path.resolve()
+        except OSError:
+            resolved = path
+        for candidate in {str(path), path.as_posix(), str(resolved), resolved.as_posix()}:
+            if candidate:
+                values.add(candidate)
+
+    for env_key in ("USER", "USERNAME", "LOGNAME"):
+        env_value = os.environ.get(env_key)
+        if env_value:
+            values.add(env_value)
+
+    for value in (getpass.getuser(), platform.node()):
+        if value:
+            values.add(value)
+
+    return sorted((value for value in values if value), key=len, reverse=True)
+
+
+def redact_diagnostic_text(value: str) -> str:
+    redacted = value
+    for token in _redaction_tokens():
+        redacted = redacted.replace(token, "<redacted>")
+    return redacted
+
+
+def repo_relative_metadata_path(path: Optional[str]) -> Optional[str]:
+    if path is None:
+        return None
+    path_obj = Path(path)
+    try:
+        return path_obj.resolve().relative_to(ROOT).as_posix()
+    except (OSError, ValueError):
+        return redact_diagnostic_text(str(path))
+
+
 def collect_system_info() -> str:
     lines = [
         "Tent of Trials - System Diagnostic Snapshot",
@@ -524,8 +571,8 @@ def build_diagnostic_report(
                 "name": name,
                 "status": "PASS" if success else "FAIL",
                 "elapsed_seconds": round(elapsed, 3),
-                "artifact": binary,
-                "output": output,
+                "artifact": repo_relative_metadata_path(binary),
+                "output": redact_diagnostic_text(output),
             }
             for name, success, elapsed, output, binary in results
         ],
@@ -632,7 +679,7 @@ def generate_logd(
         safe_dir.mkdir(parents=True, exist_ok=True)
 
         (safe_dir / "system-info.txt").write_text(
-            collect_system_info(), encoding="utf-8"
+            redact_diagnostic_text(collect_system_info()), encoding="utf-8"
         )
 
         summary_lines = [
@@ -663,7 +710,7 @@ def generate_logd(
             if binary:
                 log_lines.append(f"artifact: {binary}")
             if output:
-                log_lines.append(output)
+                log_lines.append(redact_diagnostic_text(output))
         (safe_dir / "build.log").write_text("\n".join(log_lines), encoding="utf-8")
 
         sr = subprocess.run(
