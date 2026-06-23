@@ -11,8 +11,8 @@
  * - Connection state tracking
  * - Automatic cleanup on unmount
  *
- * The reconnection strategy uses truncated exponential backoff:
- *   delay = min(base_delay * 2^attempt, max_delay) + random(0, jitter_ms)
+ * The reconnection strategy uses capped exponential backoff with jitter:
+ *   delay = min(base_delay * 2^attempt + random(0, jitter_ms), max_delay)
  *
  * TODO: Add support for WebSocket compression (permessage-deflate).
  * The extension is supported by the server but not requested by the client.
@@ -24,6 +24,14 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  calculateReconnectDelay,
+  createInitialWebSocketState,
+  shouldReconnectAfterClose,
+  transitionWebSocketState,
+  type WebSocketClientState,
+  type WebSocketConnectionState,
+} from '../services/webSocketClient';
 
 // ---------------------------------------------------------------------------
 // TYPES
@@ -43,7 +51,7 @@ export interface WSSubscription {
   callback: (data: unknown) => void;
 }
 
-export type WSConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'error';
+export type WSConnectionState = WebSocketConnectionState;
 
 export interface WSOptions {
   url: string;
@@ -64,16 +72,9 @@ export interface WSOptions {
   onMessage?: (message: WSMessage) => void;
 }
 
-export interface WSState {
+export interface WSState extends Omit<WebSocketClientState, 'lastMessage'> {
   connectionState: WSConnectionState;
   lastMessage: WSMessage | null;
-  reconnectAttempt: number;
-  queueSize: number;
-  subscriptions: number;
-  totalMessagesSent: number;
-  totalMessagesReceived: number;
-  errors: number;
-  latencyMs: number | null;
 }
 
 interface QueuedMessage {
@@ -108,17 +109,7 @@ export function useWebSocket(options: WSOptions) {
   const messageIdRef = useRef(0);
   const pingStartRef = useRef(0);
 
-  const [state, setState] = useState<WSState>({
-    connectionState: 'disconnected',
-    lastMessage: null,
-    reconnectAttempt: 0,
-    queueSize: 0,
-    subscriptions: 0,
-    totalMessagesSent: 0,
-    totalMessagesReceived: 0,
-    errors: 0,
-    latencyMs: null,
-  });
+  const [state, setState] = useState<WSState>(createInitialWebSocketState() as WSState);
 
   const updateState = useCallback((partial: Partial<WSState>) => {
     setState(prev => ({ ...prev, ...partial }));
@@ -186,7 +177,7 @@ export function useWebSocket(options: WSOptions) {
       ws.onopen = (event) => {
         if (!mountedRef.current) return;
         reconnectAttemptRef.current = 0;
-        updateState({ connectionState: 'connected', reconnectAttempt: 0 });
+        setState(prev => transitionWebSocketState(prev, { type: 'stable-open' }) as WSState);
 
         // Resubscribe to all channels
         subscriptionsRef.current.forEach((sub, channel) => {
@@ -258,7 +249,9 @@ export function useWebSocket(options: WSOptions) {
         stopPing();
         updateState({ connectionState: 'disconnected' });
         mergedOptions.onClose?.(event);
-        scheduleReconnect();
+        if (shouldReconnectAfterClose(event)) {
+          scheduleReconnect();
+        }
       };
 
       ws.onerror = (event) => {
@@ -295,10 +288,11 @@ export function useWebSocket(options: WSOptions) {
       return;
     }
 
-    const delay = Math.min(
-      mergedOptions.reconnectBaseDelay * Math.pow(2, reconnectAttemptRef.current),
-      mergedOptions.reconnectMaxDelay
-    ) + Math.random() * mergedOptions.reconnectJitter;
+    const delay = calculateReconnectDelay(reconnectAttemptRef.current, {
+      baseDelayMs: mergedOptions.reconnectBaseDelay,
+      maxDelayMs: mergedOptions.reconnectMaxDelay,
+      jitterMs: mergedOptions.reconnectJitter,
+    });
 
     reconnectAttemptRef.current++;
 
@@ -306,7 +300,10 @@ export function useWebSocket(options: WSOptions) {
       console.log(`[WS] Reconnecting in ${Math.round(delay)}ms (attempt ${reconnectAttemptRef.current})`);
     }
 
-    updateState({ connectionState: 'reconnecting', reconnectAttempt: reconnectAttemptRef.current });
+    setState(prev => transitionWebSocketState(prev, {
+      type: 'unexpected-close',
+      nextAttempt: reconnectAttemptRef.current,
+    }) as WSState);
 
     reconnectTimerRef.current = setTimeout(() => {
       if (mountedRef.current) connect();

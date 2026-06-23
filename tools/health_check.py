@@ -42,6 +42,13 @@ import time
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+logger = logging.getLogger(__name__)
+
+DEFAULT_HTTP_MAX_ATTEMPTS = 3
+DEFAULT_HTTP_BACKOFF_SECONDS = 1.0
+DEFAULT_HTTP_PROBE_ATTEMPTS = DEFAULT_HTTP_MAX_ATTEMPTS
+DEFAULT_HTTP_PROBE_BACKOFF_SECONDS = DEFAULT_HTTP_BACKOFF_SECONDS
+
 # ---------------------------------------------------------------------------
 # CONSTANTS
 # ---------------------------------------------------------------------------
@@ -71,10 +78,10 @@ DEFAULT_HTTP_BACKOFF_SECONDS = 1.0
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# CHECK FUNCTIONS
-# ---------------------------------------------------------------------------
+
 
 def request_http_service_once(host: str, port: int, path: str, timeout: int) -> Tuple[str, str, int]:
+    """Perform a single HTTP health probe without retry."""
     import http.client
 
     conn = http.client.HTTPConnection(host, port, timeout=timeout)
@@ -87,16 +94,57 @@ def request_http_service_once(host: str, port: int, path: str, timeout: int) -> 
         conn.close()
 
     if status == 200:
-        result = "OK"
-        detail = f"HTTP {status}"
-    elif status < 500:
-        result = "WARNING"
-        detail = f"HTTP {status}: {body[:100]}"
-    else:
-        result = "CRITICAL"
-        detail = f"HTTP {status}: {body[:100]}"
+        return "OK", f"HTTP {status}", status
+    if status < 500:
+        return "WARNING", f"HTTP {status}: {body[:100]}", status
+    return "CRITICAL", f"HTTP {status}: {body[:100]}", status
 
-    return result, detail, status
+
+# Backward-compatible name introduced by upstream while keeping the PR tests stable.
+http_probe_once = request_http_service_once
+
+
+def probe_http_with_retry(
+    host: str,
+    port: int,
+    path: str,
+    timeout: int,
+    max_attempts: int = DEFAULT_HTTP_PROBE_ATTEMPTS,
+    initial_backoff_seconds: float = DEFAULT_HTTP_PROBE_BACKOFF_SECONDS,
+    sleep_fn: Callable[[float], None] = time.sleep,
+    probe_fn: Optional[Callable[[str, int, str, int], Tuple[str, str, int]]] = None,
+) -> Tuple[str, str, int]:
+    """Probe HTTP with exponential backoff between retryable failures."""
+    attempts = max(1, max_attempts)
+    probe = probe_fn or request_http_service_once
+    backoff = max(0.0, initial_backoff_seconds)
+    last_result: Tuple[str, str, int] = ("CRITICAL", "probe failed", 0)
+
+    for attempt in range(1, attempts + 1):
+        try:
+            result, detail, code = probe(host, port, path, timeout)
+            last_result = result, detail, code
+            if result != "CRITICAL":
+                return result, detail, code
+        except Exception as exc:
+            last_result = "CRITICAL", str(exc), 0
+
+        if attempt < attempts:
+            logger.warning(
+                "HTTP probe failed for %s:%s%s (attempt %d/%d): %s; retrying in %.1fs",
+                host,
+                port,
+                path,
+                attempt,
+                attempts,
+                last_result[1],
+                backoff,
+            )
+            if backoff > 0:
+                sleep_fn(backoff)
+            backoff *= 2
+
+    return last_result
 
 
 def check_http_service(
@@ -108,32 +156,21 @@ def check_http_service(
     backoff_seconds: float = DEFAULT_HTTP_BACKOFF_SECONDS,
     sleep_fn: Callable[[float], None] = time.sleep,
 ) -> Tuple[str, str, int]:
-    attempts = max(1, max_attempts)
-    delay = max(0.0, backoff_seconds)
-    last_error: Optional[Exception] = None
-
-    for attempt in range(1, attempts + 1):
-        try:
-            return request_http_service_once(host, port, path, timeout)
-        except Exception as e:
-            last_error = e
-            if attempt == attempts:
-                break
-            logger.warning(
-                "HTTP health probe failed for %s:%s%s on attempt %s/%s: %s; retrying in %.1fs",
-                host,
-                port,
-                path,
-                attempt,
-                attempts,
-                e,
-                delay,
-            )
-            if delay > 0:
-                sleep_fn(delay)
-            delay *= 2
-
-    return "CRITICAL", str(last_error), 0
+    if (
+        max_attempts == DEFAULT_HTTP_MAX_ATTEMPTS
+        and backoff_seconds == DEFAULT_HTTP_BACKOFF_SECONDS
+        and sleep_fn is time.sleep
+    ):
+        return probe_http_with_retry(host, port, path, timeout)
+    return probe_http_with_retry(
+        host,
+        port,
+        path,
+        timeout,
+        max_attempts=max_attempts,
+        initial_backoff_seconds=backoff_seconds,
+        sleep_fn=sleep_fn,
+    )
 
 
 def check_tcp_port(host: str, port: int, timeout: int) -> Tuple[str, str, float]:
@@ -414,3 +451,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
