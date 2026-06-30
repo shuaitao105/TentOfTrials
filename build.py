@@ -223,7 +223,66 @@ def encryptly_platform_help() -> str:
     return f"detected {detected}; available: {available}"
 
 
-def check_encryptly_runs(timeout: int = 600) -> tuple[bool, str]:
+def run_encryptly_pack(
+    encryptly_bin: Path,
+    logd_path: Path,
+    include_path: Path,
+    *,
+    max_file_size: str = "32000",
+    poll_interval: float = 0.25,
+) -> tuple[bool, str, str]:
+    """Run encryptly pack in the background and wait until the .logd exists.
+
+    encryptly may return before the archive is fully written; polling avoids false
+    failures when the parent process exits early.
+    """
+    cmd = [
+        str(encryptly_bin),
+        "pack",
+        str(logd_path),
+        "--include",
+        str(include_path),
+        "--max-file-size",
+        max_file_size,
+    ]
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except Exception as e:
+        return False, "", str(e)
+
+    stdout_data = ""
+    stderr_data = ""
+    try:
+        while True:
+            if logd_path.exists() and logd_path.stat().st_size > 0:
+                stdout_data, stderr_data = proc.communicate()
+                break
+            rc = proc.poll()
+            if rc is not None:
+                stdout_data, stderr_data = proc.communicate()
+                if logd_path.exists() and logd_path.stat().st_size > 0:
+                    return True, stdout_data.strip(), stderr_data.strip()
+                detail = stderr_data.strip() or stdout_data.strip() or f"exit {rc}"
+                return False, stdout_data.strip(), detail
+            time.sleep(poll_interval)
+    except Exception as e:
+        proc.kill()
+        proc.communicate()
+        return False, "", str(e)
+
+    if proc.returncode not in (None, 0):
+        detail = stderr_data.strip() or stdout_data.strip() or f"exit {proc.returncode}"
+        return False, stdout_data.strip(), detail
+    return True, stdout_data.strip(), stderr_data.strip()
+
+
+def check_encryptly_runs() -> tuple[bool, str]:
     """Verify encryptly can create a diagnostic bundle before doing any build work."""
     encryptly_bin = get_encryptly_bin()
     if encryptly_bin is None:
@@ -236,29 +295,17 @@ def check_encryptly_runs(timeout: int = 600) -> tuple[bool, str]:
         shutil.rmtree(workspace, ignore_errors=True)
         safe_dir.mkdir(parents=True, exist_ok=True)
         (safe_dir / "preflight.txt").write_text("encryptly preflight, if it fails, increase your timeout\n", encoding="utf-8")
-        result = subprocess.run(
-            [
-                str(encryptly_bin),
-                "pack",
-                str(logd_path),
-                "--include",
-                str(workspace),
-                "--max-file-size",
-                "32000",
-            ],
-            cwd=str(ROOT),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
+        ok, _, detail = run_encryptly_pack(
+            encryptly_bin,
+            logd_path,
+            workspace,
+            max_file_size="32000",
         )
-        # if result.returncode != 0:
-        #     output = result.stderr.strip() or result.stdout.strip() or "encryptly pack preflight failed"
-        #     return False, output
+        if not ok:
+            return False, detail or "encryptly pack preflight failed"
         if not logd_path.exists():
             return False, "encryptly preflight completed without creating a .logd"
         return True, "encryptly preflight passed"
-    except subprocess.TimeoutExpired:
-        return False, f"encryptly preflight TIMEOUT ({timeout}s)"
     except Exception as e:
         return False, str(e)
     finally:
@@ -683,23 +730,14 @@ def generate_logd(
                 log_lines.append(output)
         (safe_dir / "build.log").write_text("\n".join(log_lines), encoding="utf-8")
 
-        sr = subprocess.run(
-            [
-                str(encryptly_bin),
-                "pack",
-                str(logd_path),
-                "--include",
-                str(workspace),
-                "--max-file-size",
-                "61440",
-            ],
-            cwd=str(ROOT),
-            capture_output=True,
-            text=True,
-            timeout=1500,
+        pack_ok, safe_pw, pack_detail = run_encryptly_pack(
+            encryptly_bin,
+            logd_path,
+            workspace,
+            max_file_size="61440",
         )
-        if sr.returncode != 0:
-            error = sr.stderr.strip() or sr.stdout.strip() or "encryptly pack failed"
+        if not pack_ok:
+            error = pack_detail or "encryptly pack failed"
             print(
                 f"    {color('✗', Colors.RED)} {logd_path.relative_to(ROOT)} creation failed: "
                 f"{error}"
@@ -719,7 +757,7 @@ def generate_logd(
             commit_diagnostic_artifacts([metadata_path], commit_id)
             return False
 
-        safe_pw = sr.stdout.strip()
+        safe_pw = safe_pw.strip()
         logd_files = split_diagnostic_logd(logd_path)
         logd_relpaths = [str(path.relative_to(ROOT)) for path in logd_files]
         decrypt_target = logd_relpaths[0] if len(logd_relpaths) == 1 else str(logd_path.relative_to(ROOT))
