@@ -278,6 +278,15 @@ def color(text: str, code: str) -> str:
         return text
     return f"{code}{text}{Colors.RESET}"
 
+
+def _configure_stdio() -> None:
+    """Avoid UnicodeEncodeError on Windows consoles (e.g. GBK)."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(errors="replace")
+
+
 def check_prerequisites() -> list[str]:
     required = {
         "cargo": "Rust",
@@ -777,6 +786,7 @@ def print_summary(results: list[tuple[str, bool, float, str, Optional[str]]]):
           f"{total_time:.1f}s total")
 
 def main():
+    _configure_stdio()
     parser = argparse.ArgumentParser(
         description="Tent of Trials  -  Multi-Language Build System",
         formatter_class=argparse.RawDescriptionHelpFormatter,
