@@ -281,10 +281,18 @@ def color(text: str, code: str) -> str:
 
 def _configure_stdio() -> None:
     """Avoid UnicodeEncodeError on Windows consoles (e.g. GBK)."""
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
-        if reconfigure is not None:
-            reconfigure(errors="replace")
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            try:
+                reconfigure(errors="replace")
+            except Exception:
+                pass
 
 
 def check_prerequisites() -> list[str]:
